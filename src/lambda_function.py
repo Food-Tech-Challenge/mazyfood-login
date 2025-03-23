@@ -16,6 +16,7 @@ COGNITO_USER_POOL_ID = os.environ['COGNITO_USER_POOL_ID']
 # Inicializando serviços AWS
 cognito = boto3.client('cognito-idp')
 
+
 def lambda_handler(event, context):
     connection = None
 
@@ -27,9 +28,29 @@ def lambda_handler(event, context):
             password=RDS_PASSWORD
         )
 
-        cpf = event.get('cpf')
-        nome = event.get('nome')
-        email = event.get('email')
+        token = event.get('token')
+
+        try:
+            cognito_response = cognito.get_user(
+                AccessToken=token
+            )
+
+        except cognito.exceptions.NotAuthorizedException as error:
+            return {
+                'statusCode': 401,
+                'body': json.dumps({'error': f'Token inválido no Cognito: {str(error)}'})
+            }
+
+        cpf = cognito_response["Username"]
+
+        # Percorrer a lista de atributos para extrair 'email' e 'name'
+        email = None
+        nome = None
+        for attribute in cognito_response["UserAttributes"]:
+            if attribute["Name"] == "email":
+                email = attribute["Value"]
+            elif attribute["Name"] == "name":
+                nome = attribute["Value"]
 
         with connection.cursor() as cursor:
             # Cliente anônimo
@@ -62,27 +83,6 @@ def lambda_handler(event, context):
             )
             cliente_id = cursor.fetchone()[0]
             connection.commit()
-
-            # Criar usuário no Cognito
-            try:
-                cognito_response = cognito.admin_create_user(
-                    UserPoolId=COGNITO_USER_POOL_ID,
-                    Username=cpf,
-                    UserAttributes=[
-                        {'Name': 'email', 'Value': email},
-                        {'Name': 'custom:cpf', 'Value': cpf},
-                        {'Name': 'name', 'Value': nome}
-                    ]
-                )
-
-            except (BotoCoreError, ClientError) as e:
-                # Se a criação no Cognito falhar, remove o cliente criado na tabela
-                cursor.execute("DELETE FROM customers WHERE id = %s", (cliente_id,))
-                connection.commit()
-                return {
-                    'statusCode': 500,
-                    'body': json.dumps({'error': f'Erro ao criar usuário no Cognito: {str(e)}'})
-                }
 
             return {
                 'statusCode': 201,
