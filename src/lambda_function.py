@@ -1,23 +1,37 @@
 import psycopg2
 import boto3
 import json
-import os
 from botocore.exceptions import BotoCoreError, ClientError
-
-# Configuração do banco RDS PostgreSQL
-RDS_HOST = os.environ['RDS_HOST']
-RDS_USER = os.environ['RDS_USER']
-RDS_PASSWORD = os.environ['RDS_PASSWORD']
-RDS_DATABASE = os.environ['RDS_DATABASE']
-
-# Configuração do Cognito
-COGNITO_USER_POOL_ID = os.environ['COGNITO_USER_POOL_ID']
 
 # Inicializando serviços AWS
 cognito = boto3.client('cognito-idp')
 
-
 def lambda_handler(event, context):
+
+    session = boto3.session.Session()
+    client = session.client(
+        service_name="secretsmanager",
+        region_name="us-east-1"
+    )
+
+    try:
+        get_secret_value_response = client.get_secret_value(
+            SecretId="mazfood-secrets"
+        )
+    except ClientError as e:
+        return {
+            'statusCode': 401,
+            'body': json.dumps({'error': f'Erro as pegar credenciais: {str(e)}'})
+        }
+
+    secret = get_secret_value_response['SecretString']
+    config = json.loads(secret)
+    RDS_HOST = config["RDS_HOST"]
+    RDS_USER = config["RDS_USER"]
+    RDS_PASSWORD = config["RDS_PASSWORD"]
+    RDS_DATABASE = config["RDS_DATABASE"]
+    COGNITO_USER_POOL_ID = config['COGNITO_USER_POOL_ID']
+
     connection = None
 
     try:
