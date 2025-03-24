@@ -1,5 +1,5 @@
 data "archive_file" "python_lambda_package" {
-  type = "zip"
+  type        = "zip"
   source_file = "${path.module}/../src/lambda_function.py"
   output_path = "lambda_function.zip"
 }
@@ -27,9 +27,9 @@ data "aws_subnets" "private" {
   }
 }
 
-data aws_security_group "selected_security_group" {
+data "aws_security_group" "selected_security_group" {
   filter {
-    name = "tag:Name"
+    name   = "tag:Name"
     values = ["mazyfood-security-group-db"]
   }
 }
