@@ -1,6 +1,6 @@
 resource "aws_api_gateway_rest_api" "auth_api" {
   name        = "${var.project}_auth_api"
-  description = "API Gateway to authenticate"
+  description = "API Gateway to Authenticate"
 }
 
 resource "aws_api_gateway_resource" "auth_resource" {
