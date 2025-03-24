@@ -8,7 +8,7 @@ terraform {
 
   required_version = ">= 1.11"
 
-  #   backend "s3" {
-  #     key = "mazyfood-login/terraform.tfstate"
-  #   }
+  backend "s3" {
+    key = "mazyfood-login/terraform.tfstate"
+  }
 }
