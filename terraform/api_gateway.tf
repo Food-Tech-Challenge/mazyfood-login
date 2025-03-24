@@ -1,28 +1,20 @@
-resource "aws_api_gateway_rest_api" "auth_api" {
-  name        = "${var.project}_auth_api"
-  description = "API Gateway to Authenticate"
+resource "aws_apigatewayv2_api" "auth_api" {
+  name          = "${var.project}_auth_api"
+  protocol_type = "HTTP"
+  description   = "API Gateway HTTP para autenticação"
 }
 
-resource "aws_api_gateway_resource" "auth_resource" {
-  rest_api_id = aws_api_gateway_rest_api.auth_api.id
-  parent_id   = aws_api_gateway_rest_api.auth_api.root_resource_id
-  path_part   = "auth"
+resource "aws_apigatewayv2_route" "auth_post" {
+  api_id    = aws_apigatewayv2_api.auth_api.id
+  route_key = "GET /auth"
+  target    = "integrations/${aws_apigatewayv2_integration.auth_lambda.id}"
 }
 
-resource "aws_api_gateway_method" "auth_post" {
-  rest_api_id   = aws_api_gateway_rest_api.auth_api.id
-  resource_id   = aws_api_gateway_resource.auth_resource.id
-  http_method   = "GET"
-  authorization = "NONE"
-}
-
-resource "aws_api_gateway_integration" "auth_lambda" {
-  rest_api_id             = aws_api_gateway_rest_api.auth_api.id
-  resource_id             = aws_api_gateway_resource.auth_resource.id
-  http_method             = aws_api_gateway_method.auth_post.http_method
-  type                    = "AWS_PROXY"
-  integration_http_method = "GET"
-  uri                     = aws_lambda_function.auth_lambda.invoke_arn
+resource "aws_apigatewayv2_integration" "auth_lambda" {
+  api_id                 = aws_apigatewayv2_api.auth_api.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.auth_lambda.invoke_arn
+  payload_format_version = "2.0"
 }
 
 resource "aws_lambda_permission" "auth_api_permission" {
@@ -30,25 +22,15 @@ resource "aws_lambda_permission" "auth_api_permission" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.auth_lambda.function_name
   principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_api_gateway_rest_api.auth_api.execution_arn}/*/*"
+  source_arn    = "${aws_apigatewayv2_api.auth_api.execution_arn}/*"
 }
 
-resource "aws_api_gateway_deployment" "auth_deployment" {
-  depends_on  = [aws_api_gateway_integration.auth_lambda]
-  rest_api_id = aws_api_gateway_rest_api.auth_api.id
-}
-
-resource "aws_api_gateway_stage" "auth_v1" {
-  deployment_id = aws_api_gateway_deployment.auth_deployment.id
-  rest_api_id   = aws_api_gateway_rest_api.auth_api.id
-  stage_name    = "v1"
-
-  depends_on = [
-    aws_api_gateway_integration.auth_lambda,
-    aws_api_gateway_method.auth_post
-  ]
+resource "aws_apigatewayv2_stage" "auth_v1" {
+  api_id      = aws_apigatewayv2_api.auth_api.id
+  name        = "v1"
+  auto_deploy = true
 }
 
 output "auth_api_invoke_url" {
-  value = aws_api_gateway_deployment.auth_deployment.invoke_url
+  value = aws_apigatewayv2_api.auth_api.api_endpoint
 }
