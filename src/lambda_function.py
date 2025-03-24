@@ -3,115 +3,83 @@ import boto3
 import json
 from botocore.exceptions import BotoCoreError, ClientError
 
-# Inicializando serviços AWS
 cognito = boto3.client('cognito-idp')
 
-def lambda_handler(event, context):
-
+def get_secrets():
     session = boto3.session.Session()
-    client = session.client(
-        service_name="secretsmanager",
-        region_name="us-east-1"
-    )
-
+    client = session.client("secretsmanager", region_name="us-east-1")
+    
     try:
-        get_secret_value_response = client.get_secret_value(
-            SecretId="mazfood-secrets"
-        )
+        secret_response = client.get_secret_value(SecretId="mazyfood-secrets")
+        return json.loads(secret_response['SecretString'])
     except ClientError as e:
-        return {
-            'statusCode': 401,
-            'body': json.dumps({'error': f'Erro as pegar credenciais: {str(e)}'})
-        }
+        raise RuntimeError(f"Error retrieving credentials: {str(e)}")
 
-    secret = get_secret_value_response['SecretString']
-    config = json.loads(secret)
-    RDS_HOST = config["RDS_HOST"]
-    RDS_USER = config["RDS_USER"]
-    RDS_PASSWORD = config["RDS_PASSWORD"]
-    RDS_DATABASE = config["RDS_DATABASE"]
-    COGNITO_USER_POOL_ID = config['COGNITO_USER_POOL_ID']
-
-    connection = None
-
+def get_cognito_user(token):
     try:
-        connection = psycopg2.connect(
-            host=RDS_HOST,
-            database=RDS_DATABASE,
-            user=RDS_USER,
-            password=RDS_PASSWORD
-        )
+        return cognito.get_user(AccessToken=token)
+    except cognito.exceptions.NotAuthorizedException:
+        raise ValueError("Invalid token in Cognito")
 
-        token = event.get('token')
+def get_customer_data(cursor, cpf):
+    cursor.execute("SELECT id FROM customers WHERE cpf = %s", (cpf,))
+    return cursor.fetchone()
 
-        try:
-            cognito_response = cognito.get_user(
-                AccessToken=token
-            )
+def create_customer(cursor, connection, cpf, name, email):
+    cursor.execute(
+        "INSERT INTO customers (cpf, name, email) VALUES (%s, %s, %s) RETURNING id",
+        (cpf, name, email)
+    )
+    connection.commit()
+    return cursor.fetchone()[0]
 
-        except cognito.exceptions.NotAuthorizedException as error:
-            return {
-                'statusCode': 401,
-                'body': json.dumps({'error': f'Token inválido no Cognito: {str(error)}'})
-            }
+def lambda_handler(event, context):
+    try:
+        config = get_secrets()
+        
+        with psycopg2.connect(
+            host=config["RDS_HOST"],
+            database=config["RDS_DATABASE"],
+            user=config["RDS_USER"],
+            password=config["RDS_PASSWORD"]
+        ) as connection:
 
-        cpf = cognito_response["Username"]
+            token = event.get('token')
+            cognito_response = get_cognito_user(token)
 
-        # Percorrer a lista de atributos para extrair 'email' e 'name'
-        email = None
-        nome = None
-        for attribute in cognito_response["UserAttributes"]:
-            if attribute["Name"] == "email":
-                email = attribute["Value"]
-            elif attribute["Name"] == "name":
-                nome = attribute["Value"]
+            cpf = cognito_response.get("Username")
+            
+            # Extract user attributes
+            attributes = {attr['Name']: attr['Value'] for attr in cognito_response.get("UserAttributes", [])}
+            email, name = attributes.get('email'), attributes.get('name')
 
-        with connection.cursor() as cursor:
-            # Cliente anônimo
+            # Handle anonymous customer
             if not cpf:
                 return {
                     'statusCode': 200,
-                    'body': json.dumps({
-                        'cliente_id': None,
-                        'mensagem': 'Cliente anônimo identificado.'
-                    })
+                    'body': json.dumps({'customer_id': None, 'message': 'Anonymous customer identified.'})
                 }
 
-            # Verificar se o cliente já existe
-            cursor.execute("SELECT id FROM customers WHERE cpf = %s", (cpf,))
-            cliente = cursor.fetchone()
+            with connection.cursor() as cursor:
+                customer_record = get_customer_data(cursor, cpf)
 
-            if cliente:
+                if customer_record:
+                    return {
+                        'statusCode': 200,
+                        'body': json.dumps({'customer_id': customer_record[0], 'message': 'Customer already registered.'})
+                    }
+
+                customer_id = create_customer(cursor, connection, cpf, name, email)
                 return {
-                    'statusCode': 200,
-                    'body': json.dumps({
-                        'cliente_id': cliente[0],
-                        'mensagem': 'Cliente já cadastrado.'
-                    })
+                    'statusCode': 201,
+                    'body': json.dumps({'customer_id': customer_id, 'message': 'Customer successfully registered.'})
                 }
 
-            # Criar novo cliente na base de dados
-            cursor.execute(
-                "INSERT INTO customers (cpf, name, email) VALUES (%s, %s, %s) RETURNING id",
-                (cpf, nome, email)
-            )
-            cliente_id = cursor.fetchone()[0]
-            connection.commit()
+    except ValueError as e:
+        return {'statusCode': 401, 'body': json.dumps({'error': str(e)})}
 
-            return {
-                'statusCode': 201,
-                'body': json.dumps({
-                    'cliente_id': cliente_id,
-                    'mensagem': 'Cliente cadastrado com sucesso.'
-                })
-            }
+    except RuntimeError as e:
+        return {'statusCode': 401, 'body': json.dumps({'error': str(e)})}
 
     except Exception as e:
-        return {
-            'statusCode': 500,
-            'body': json.dumps({'error': str(e)})
-        }
-
-    finally:
-        if connection:
-            connection.close()
+        return {'statusCode': 500, 'body': json.dumps({'error': str(e)})}
